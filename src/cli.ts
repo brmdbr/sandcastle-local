@@ -15,11 +15,13 @@ import { defaultImageName } from "./run.js";
 import { getAgentProvider } from "./AgentProvider.js";
 import { AgentError, ConfigDirError, InitError } from "./errors.js";
 import {
+  Sandbox,
   SandboxFactory,
   WorktreeDockerSandboxFactory,
   WorktreeSandboxConfig,
   SANDBOX_WORKSPACE_DIR,
 } from "./SandboxFactory.js";
+import { WorktreeLocalSandboxFactory } from "./LocalSandboxFactory.js";
 import { withSandboxLifecycle } from "./SandboxLifecycle.js";
 import { resolveEnv } from "./EnvResolver.js";
 
@@ -281,14 +283,16 @@ const modelOption = Options.text("model").pipe(
 const interactiveSession = (options: {
   hostRepoDir: string;
   model?: string;
+  executionMode: ExecutionMode;
 }): Effect.Effect<
   void,
   import("./errors.js").SandboxError,
   SandboxFactory | Display
 > =>
   Effect.gen(function* () {
-    const { hostRepoDir } = options;
-    const sandboxRepoDir = SANDBOX_WORKSPACE_DIR;
+    const { hostRepoDir, executionMode } = options;
+    const sandboxRepoDir =
+      executionMode === "docker" ? SANDBOX_WORKSPACE_DIR : hostRepoDir;
     const resolvedModel = options.model ?? DEFAULT_MODEL;
     const factory = yield* SandboxFactory;
     const d = yield* Display;
@@ -298,46 +302,85 @@ const interactiveSession = (options: {
         { hostRepoDir, sandboxRepoDir, hostWorktreePath },
         (ctx) =>
           Effect.gen(function* () {
-            // Get container ID for docker exec -it
-            const hostnameResult = yield* ctx.sandbox.exec("hostname");
-            const containerId = hostnameResult.stdout.trim();
+            const exitCode =
+              executionMode === "docker"
+                ? yield* Effect.gen(function* () {
+                    const hostnameResult = yield* ctx.sandbox.exec("hostname");
+                    const containerId = hostnameResult.stdout.trim();
 
-            // Launch interactive Claude session with TTY passthrough
-            yield* d.status("Launching interactive Claude session...", "info");
+                    yield* d.status(
+                      "Launching interactive Claude session in Docker...",
+                      "info",
+                    );
 
-            const exitCode = yield* Effect.async<number, AgentError>(
-              (resume) => {
-                const proc = spawn(
-                  "docker",
-                  [
-                    "exec",
-                    "-it",
-                    "-w",
-                    ctx.sandboxRepoDir,
-                    containerId,
-                    "claude",
-                    "--dangerously-skip-permissions",
-                    "--model",
-                    resolvedModel,
-                  ],
-                  { stdio: "inherit" },
-                );
+                    return yield* Effect.async<number, AgentError>((resume) => {
+                      const proc = spawn(
+                        "docker",
+                        [
+                          "exec",
+                          "-it",
+                          "-w",
+                          ctx.sandboxRepoDir,
+                          containerId,
+                          "claude",
+                          "--dangerously-skip-permissions",
+                          "--model",
+                          resolvedModel,
+                        ],
+                        { stdio: "inherit" },
+                      );
 
-                proc.on("error", (error) => {
-                  resume(
-                    Effect.fail(
-                      new AgentError({
-                        message: `Failed to launch Claude: ${error.message}`,
-                      }),
-                    ),
-                  );
-                });
+                      proc.on("error", (error) => {
+                        resume(
+                          Effect.fail(
+                            new AgentError({
+                              message: `Failed to launch Claude: ${error.message}`,
+                            }),
+                          ),
+                        );
+                      });
 
-                proc.on("close", (code) => {
-                  resume(Effect.succeed(code ?? 0));
-                });
-              },
-            );
+                      proc.on("close", (code) => {
+                        resume(Effect.succeed(code ?? 0));
+                      });
+                    });
+                  })
+                : yield* Effect.gen(function* () {
+                    yield* d.status(
+                      "Launching interactive Claude session on the host...",
+                      "info",
+                    );
+
+                    return yield* Effect.async<number, AgentError>((resume) => {
+                      const proc = spawn(
+                        "claude",
+                        [
+                          "--dangerously-skip-permissions",
+                          "--model",
+                          resolvedModel,
+                        ],
+                        {
+                          cwd: ctx.sandboxRepoDir,
+                          stdio: "inherit",
+                          env: process.env,
+                        },
+                      );
+
+                      proc.on("error", (error) => {
+                        resume(
+                          Effect.fail(
+                            new AgentError({
+                              message: `Failed to launch Claude: ${error.message}`,
+                            }),
+                          ),
+                        );
+                      });
+
+                      proc.on("close", (code) => {
+                        resume(Effect.succeed(code ?? 0));
+                      });
+                    });
+                  });
 
             yield* d.status(
               `Session ended (exit code ${exitCode}). Syncing changes back...`,
@@ -353,37 +396,58 @@ const interactiveCommand = Command.make(
   {
     imageName: imageNameOption,
     model: modelOption,
+    executionMode: executionModeOption,
   },
-  ({ imageName: imageNameFlag, model }) =>
+  ({ imageName: imageNameFlag, model, executionMode: executionModeFlag }) =>
     Effect.gen(function* () {
       const hostRepoDir = process.cwd();
       yield* requireConfigDir(hostRepoDir);
 
-      const imageName = resolveImageName(imageNameFlag, hostRepoDir);
+      const executionMode: ExecutionMode =
+        executionModeFlag._tag === "Some"
+          ? ((executionModeFlag.value === "local"
+              ? "local"
+              : "docker") as ExecutionMode)
+          : DEFAULT_EXECUTION_MODE;
+      const imageName =
+        executionMode === "docker"
+          ? resolveImageName(imageNameFlag, hostRepoDir)
+          : undefined;
 
       // Resolve env vars
-      const env = yield* resolveEnv(hostRepoDir);
+      const env = yield* resolveEnv(
+        hostRepoDir,
+        executionMode === "local"
+          ? ["GH_TOKEN"]
+          : ["ANTHROPIC_API_KEY", "GH_TOKEN"],
+      );
 
       const resolvedModel = model._tag === "Some" ? model.value : undefined;
 
       const d = yield* Display;
-      yield* d.summary("Sandcastle Interactive", { Image: imageName });
+      yield* d.summary("Sandcastle Interactive", {
+        Execution: executionMode,
+        ...(imageName ? { Image: imageName } : {}),
+      });
 
-      const factoryLayer = Layer.provide(
-        WorktreeDockerSandboxFactory.layer,
-        Layer.merge(
-          Layer.succeed(WorktreeSandboxConfig, {
-            imageName,
-            env,
-            hostRepoDir,
-          }),
-          NodeFileSystem.layer,
-        ),
+      const sharedLayer = Layer.merge(
+        Layer.succeed(WorktreeSandboxConfig, {
+          imageName,
+          env,
+          hostRepoDir,
+        }),
+        NodeFileSystem.layer,
       );
+
+      const factoryLayer =
+        executionMode === "docker"
+          ? Layer.provide(WorktreeDockerSandboxFactory.layer, sharedLayer)
+          : Layer.provide(WorktreeLocalSandboxFactory.layer, sharedLayer);
 
       yield* interactiveSession({
         hostRepoDir,
         model: resolvedModel,
+        executionMode,
       }).pipe(Effect.provide(factoryLayer));
     }),
 );

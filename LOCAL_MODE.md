@@ -60,3 +60,4 @@ await run({
 - Docker image is not used
 - `.sandcastle/Dockerfile` is ignored
 - Claude runs in the worktree on the host
+- `interactive` can also use local mode, so live Claude sessions can run directly on the host worktree
