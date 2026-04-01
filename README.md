@@ -6,20 +6,22 @@
   </picture>
 </div>
 
-## What Is Sandcastle?
+## What Is Sandcastle Local?
 
-A TypeScript library for orchestrating AI coding agents in isolated Docker containers:
+A TypeScript library for orchestrating AI coding agents with git worktrees. This fork supports two execution backends:
 
-1. You invoke agents with a single `sandcastle.run()`.
-2. Sandcastle handles building worktrees and sandboxing the agent.
-3. The commits made on the branches get merged back.
+1. `docker` — the original sandboxed container approach
+2. `local` — runs Claude Code directly on the host using your existing Claude CLI login
 
-Great for parallelizing multiple AFK agents, creating review pipelines, or even just orchestrating your own agents.
+In both modes, you invoke agents with a single `sandcastle.run()`, Sandcastle handles git worktrees and iteration orchestration, and the commits made on branches get merged back.
+
+Great for parallelizing multiple AFK agents, creating review pipelines, or orchestrating your own agents.
 
 ## Prerequisites
 
-- [Docker Desktop](https://www.docker.com/)
 - [Git](https://git-scm.com/)
+- For `docker` mode: [Docker Desktop](https://www.docker.com/)
+- For `local` mode: [Claude Code CLI](https://claude.ai/) installed and already logged in on the host
 
 ## Quick start
 
@@ -29,13 +31,16 @@ Great for parallelizing multiple AFK agents, creating review pipelines, or even 
 npm install @ai-hero/sandcastle
 ```
 
-2. Run `sandcastle init`. This scaffolds a `.sandcastle` directory with all the files needed.
+2. Run `sandcastle init`. For host Claude CLI usage, choose local mode:
 
 ```bash
-npx sandcastle init
+npx sandcastle init --execution-mode local
 ```
 
-3. Edit `.sandcastle/.env` and fill in your default values for `ANTHROPIC_API_KEY`
+3. Copy `.sandcastle/.env.example` to `.sandcastle/.env` and fill in anything you need.
+
+- In `local` mode, that is typically just `GH_TOKEN`
+- In `docker` mode, you will usually want `ANTHROPIC_API_KEY` and `GH_TOKEN`
 
 ```bash
 cp .sandcastle/.env.example .sandcastle/.env
@@ -53,6 +58,7 @@ import { run } from "@ai-hero/sandcastle";
 
 await run({
   promptFile: ".sandcastle/prompt.md",
+  executionMode: "local",
 });
 ```
 
@@ -65,6 +71,7 @@ import { run } from "@ai-hero/sandcastle";
 
 const result = await run({
   promptFile: ".sandcastle/prompt.md",
+  executionMode: "local",
 });
 
 console.log(result.iterationsRun); // number of iterations executed
@@ -96,7 +103,10 @@ const result = await run({
   // Claude model passed to the agent. Default: "claude-opus-4-6"
   model: "claude-opus-4-6",
 
-  // Docker image used for the sandbox. Default: "sandcastle:<repo-dir-name>"
+  // Execution backend. Default: "docker"
+  executionMode: "local",
+
+  // Docker image used for the sandbox. Ignored in local mode.
   imageName: "sandcastle:local",
 
   // Display name for this run, shown as a prefix in log output.
@@ -133,12 +143,14 @@ console.log(result.branch); // target branch name
 
 Sandcastle uses a worktree-based architecture for agent execution:
 
-- **Worktree**: Sandcastle creates a git worktree on the host at `.sandcastle/worktrees/`. The worktree is a just a normal `git worktree`.
-- **Bind-mount**: The worktree directory is bind-mounted into the sandbox container as the agent's working directory. The agent writes directly to the host filesystem through the mount.
-- **No sync needed**: Because the agent writes directly to the host filesystem, there are no sync-in or sync-out operations. Commits made by the agent are immediately visible on the host.
-- **Merge back**: After the run completes, the temp worktree branch is fast-forward merged back to the target branch, and the worktree is cleaned up.
+- **Worktree**: Sandcastle creates a git worktree on the host at `.sandcastle/worktrees/`. The worktree is just a normal `git worktree`.
+- **Execution backend**:
+  - In `docker` mode, the worktree is bind-mounted into a sandbox container.
+  - In `local` mode, Claude runs directly on the host in that worktree using your existing CLI login.
+- **No sync needed**: The agent writes directly to the worktree, so commits are immediately visible on the host.
+- **Merge back**: After the run completes, the temp worktree branch is merged back to the target branch and the worktree is cleaned up.
 
-From your point of view, you just run `sandcastle.run({ branch: 'foo' })`, and get a commit on branch `foo` once it's complete. All 100% local.
+From your point of view, you just run `sandcastle.run({ branch: 'foo' })`, and get a commit on branch `foo` once it's complete.
 
 ## Prompts
 
@@ -257,11 +269,12 @@ Select a template during `sandcastle init` when prompted, or re-run init in a fr
 
 ### `sandcastle init`
 
-Scaffolds the `.sandcastle/` config directory and builds the Docker image. This is the first command you run in a new repo.
+Scaffolds the `.sandcastle/` config directory. In `docker` mode it can also build the Docker image immediately; in `local` mode it skips image build.
 
-| Option         | Required | Default                      | Description       |
-| -------------- | -------- | ---------------------------- | ----------------- |
-| `--image-name` | No       | `sandcastle:<repo-dir-name>` | Docker image name |
+| Option             | Required | Default                      | Description                            |
+| ------------------ | -------- | ---------------------------- | -------------------------------------- |
+| `--image-name`     | No       | `sandcastle:<repo-dir-name>` | Docker image name                      |
+| `--execution-mode` | No       | `docker`                     | Execution backend: `docker` or `local` |
 
 Creates the following files:
 
@@ -288,21 +301,23 @@ Rebuilds the Docker image from an existing `.sandcastle/` directory. Use this af
 
 Removes the Docker image.
 
-| Option         | Required | Default                      | Description       |
-| -------------- | -------- | ---------------------------- | ----------------- |
-| `--image-name` | No       | `sandcastle:<repo-dir-name>` | Docker image name |
+| Option             | Required | Default                      | Description                            |
+| ------------------ | -------- | ---------------------------- | -------------------------------------- |
+| `--image-name`     | No       | `sandcastle:<repo-dir-name>` | Docker image name                      |
+| `--execution-mode` | No       | `docker`                     | Execution backend: `docker` or `local` |
 
 ### `RunOptions`
 
 | Option               | Type               | Default                       | Description                                                                 |
-| -------------------- | ------------------ | ----------------------------- | --------------------------------------------------------------------------- |
+| -------------------- | ------------------ | ----------------------------- | --------------------------------------------------------------------------- | ----------------- |
 | `prompt`             | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                        |
 | `promptFile`         | string             | —                             | Path to prompt file (mutually exclusive with `prompt`)                      |
 | `maxIterations`      | number             | `1`                           | Maximum iterations to run                                                   |
 | `hooks`              | object             | —                             | Lifecycle hooks (`onSandboxReady`)                                          |
 | `branch`             | string             | —                             | Target branch for sandbox work                                              |
 | `model`              | string             | `claude-opus-4-6`             | Model to use for the agent                                                  |
-| `imageName`          | string             | `sandcastle:<repo-dir-name>`  | Docker image name for the sandbox                                           |
+| `executionMode`      | `"docker"          | "local"`                      | `docker`                                                                    | Execution backend |
+| `imageName`          | string             | `sandcastle:<repo-dir-name>`  | Docker image name for the sandbox (ignored in local mode)                   |
 | `name`               | string             | —                             | Display name for the run, shown as a prefix in log output                   |
 | `promptArgs`         | PromptArgs         | —                             | Key-value map for `{{KEY}}` placeholder substitution                        |
 | `copyToSandbox`      | string[]           | —                             | Host-relative file paths to copy into the worktree before start             |
@@ -321,7 +336,7 @@ Removes the Docker image.
 | `branch`           | string      | Target branch name                                                 |
 | `logFilePath`      | string?     | Path to the log file (only when logging to a file)                 |
 
-Environment variables are resolved automatically from `.sandcastle/.env` and `process.env` — no need to pass them to the API. The required variables depend on the **agent provider** (see `sandcastle init` output for details).
+Environment variables are resolved automatically from `.sandcastle/.env` and `process.env` — no need to pass them to the API. The required variables depend on both the **agent provider** and the **execution mode**. In this fork, `local` mode is designed to work with an existing Claude CLI login on the host, so it does not require `ANTHROPIC_API_KEY`.
 
 ## Configuration
 
@@ -329,9 +344,11 @@ Environment variables are resolved automatically from `.sandcastle/.env` and `pr
 
 All per-repo sandbox configuration lives in `.sandcastle/`. Run `sandcastle init` to create it.
 
-### Custom Dockerfile
+### Dockerfile and local mode
 
-The `.sandcastle/Dockerfile` controls the sandbox environment. The default template installs:
+The `.sandcastle/Dockerfile` only matters in `docker` mode. In `local` mode, commands run on the host in the worktree and your existing host tooling is used.
+
+The default Docker template installs:
 
 - **Node.js 22** (base image)
 - **git**, **curl**, **jq** (system dependencies)

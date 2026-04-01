@@ -61,9 +61,10 @@ describe("sandcastle CLI", () => {
     }
   });
 
-  it("init --help shows --template flag", async () => {
+  it("init --help shows --template and --execution-mode flags", async () => {
     const { stdout } = await runCli("init --help", process.cwd());
     expect(stdout).toContain("--template");
+    expect(stdout).toContain("--execution-mode");
   });
 
   it("init --help does not expose --agent flag", async () => {

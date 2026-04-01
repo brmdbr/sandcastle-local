@@ -15,14 +15,27 @@ An agent provider defines how Sandcastle interacts with a specific AI coding too
 
 ### Claude Code
 
-The default agent provider. Uses Claude Code as the AI coding agent inside the sandbox.
+The default agent provider. This fork can use Claude Code in two execution modes:
 
-Required environment variables:
+- `docker`: Claude runs inside the sandbox container
+- `local`: Claude runs directly on the host using the existing Claude CLI login
+
+Required environment variables by mode:
+
+#### Docker mode
 
 | Variable | Description |
 | --- | --- |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `GH_TOKEN` | GitHub personal access token |
+
+#### Local mode
+
+| Variable | Description |
+| --- | --- |
+| `GH_TOKEN` | GitHub personal access token |
+
+`local` mode is intended for machines where Claude Code CLI is already installed and authenticated on the host.
 
 ## Custom Providers
 

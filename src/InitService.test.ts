@@ -425,10 +425,17 @@ describe("InitService scaffold", () => {
       expect(joined).toContain("Fake agent secret");
     });
 
-    it("lists claude-code provider env vars when using claudeCodeProvider", () => {
+    it("lists claude-code provider env vars in docker mode", () => {
       const lines = getNextStepsLines("blank", claudeCodeProvider, "docker");
       const joined = lines.join("\n");
       expect(joined).toContain("ANTHROPIC_API_KEY");
+      expect(joined).toContain("GH_TOKEN");
+    });
+
+    it("lists claude-code provider env vars in local mode without API key", () => {
+      const lines = getNextStepsLines("blank", claudeCodeProvider, "local");
+      const joined = lines.join("\n");
+      expect(joined).not.toContain("ANTHROPIC_API_KEY");
       expect(joined).toContain("GH_TOKEN");
     });
   });
