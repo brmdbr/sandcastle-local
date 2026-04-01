@@ -37,11 +37,14 @@ const TEMPLATES: TemplateMetadata[] = [
 
 export const listTemplates = (): TemplateMetadata[] => TEMPLATES;
 
+import type { ExecutionMode } from "./ExecutionMode.js";
+
 export function getNextStepsLines(
   template: string,
   provider: AgentProvider,
+  mode: ExecutionMode,
 ): string[] {
-  const envLines = Object.entries(provider.envManifest).map(
+  const envLines = Object.entries(provider.envManifest(mode)).map(
     ([key, description]) => `   - ${key} — ${description}`,
   );
   const envStep = ["1. Set the following in .sandcastle/.env:", ...envLines];
@@ -125,6 +128,7 @@ const copyTemplateFiles = (
 export const scaffold = (
   repoDir: string,
   provider: AgentProvider,
+  mode: ExecutionMode,
   templateName = "blank",
 ): Effect.Effect<void, Error, FileSystem.FileSystem> =>
   Effect.gen(function* () {
@@ -159,7 +163,7 @@ export const scaffold = (
         fs
           .writeFileString(
             join(configDir, ".env.example"),
-            buildEnvExample(provider.envManifest),
+            buildEnvExample(provider.envManifest(mode)),
           )
           .pipe(Effect.mapError((e) => new Error(e.message))),
         fs

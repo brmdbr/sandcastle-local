@@ -6,12 +6,17 @@ describe("claudeCodeProvider", () => {
     expect(claudeCodeProvider.name).toBe("claude-code");
   });
 
-  it("envManifest contains ANTHROPIC_API_KEY and GH_TOKEN but NOT CLAUDE_CODE_OAUTH_TOKEN", () => {
-    expect(claudeCodeProvider.envManifest).not.toHaveProperty(
-      "CLAUDE_CODE_OAUTH_TOKEN",
-    );
-    expect(claudeCodeProvider.envManifest).toHaveProperty("ANTHROPIC_API_KEY");
-    expect(claudeCodeProvider.envManifest).toHaveProperty("GH_TOKEN");
+  it("envManifest varies by execution mode", () => {
+    const dockerEnv = claudeCodeProvider.envManifest("docker");
+    const localEnv = claudeCodeProvider.envManifest("local");
+
+    expect(dockerEnv).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(dockerEnv).toHaveProperty("ANTHROPIC_API_KEY");
+    expect(dockerEnv).toHaveProperty("GH_TOKEN");
+
+    expect(localEnv).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(localEnv).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(localEnv).toHaveProperty("GH_TOKEN");
   });
 
   it("has a non-empty dockerfileTemplate", () => {

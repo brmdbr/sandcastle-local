@@ -1,8 +1,10 @@
 import { SANDBOX_WORKSPACE_DIR } from "./SandboxFactory.js";
 
+import type { ExecutionMode } from "./ExecutionMode.js";
+
 export interface AgentProvider {
   readonly name: string;
-  readonly envManifest: Record<string, string>;
+  readonly envManifest: (mode: ExecutionMode) => Record<string, string>;
   readonly dockerfileTemplate: string;
 }
 
@@ -44,9 +46,17 @@ ENTRYPOINT ["sleep", "infinity"]
 export const claudeCodeProvider: AgentProvider = {
   name: "claude-code",
 
-  envManifest: {
-    ANTHROPIC_API_KEY: "Anthropic API key",
-    GH_TOKEN: "GitHub personal access token",
+  envManifest: (mode): Record<string, string> => {
+    if (mode === "local") {
+      return {
+        GH_TOKEN: "GitHub personal access token",
+      };
+    }
+
+    return {
+      ANTHROPIC_API_KEY: "Anthropic API key",
+      GH_TOKEN: "GitHub personal access token",
+    };
   },
 
   dockerfileTemplate: CLAUDE_CODE_DOCKERFILE,

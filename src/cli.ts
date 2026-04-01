@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { styleText } from "node:util";
 import { Display } from "./Display.js";
 import { DEFAULT_MODEL } from "./Orchestrator.js";
+import { DEFAULT_EXECUTION_MODE, type ExecutionMode } from "./ExecutionMode.js";
 import { buildImage, removeImage } from "./DockerLifecycle.js";
 import { scaffold, listTemplates, getNextStepsLines } from "./InitService.js";
 import { defaultImageName } from "./run.js";
@@ -64,16 +65,28 @@ const templateOption = Options.text("template").pipe(
   Options.optional,
 );
 
+const executionModeOption = Options.text("execution-mode").pipe(
+  Options.withDescription("Execution mode: docker or local"),
+  Options.optional,
+);
+
 const initCommand = Command.make(
   "init",
   {
     imageName: imageNameOption,
     template: templateOption,
+    executionMode: executionModeOption,
   },
-  ({ imageName: imageNameFlag, template }) =>
+  ({ imageName: imageNameFlag, template, executionMode: executionModeFlag }) =>
     Effect.gen(function* () {
       const d = yield* Display;
       const cwd = process.cwd();
+      const executionMode: ExecutionMode =
+        executionModeFlag._tag === "Some"
+          ? ((executionModeFlag.value === "local"
+              ? "local"
+              : "docker") as ExecutionMode)
+          : DEFAULT_EXECUTION_MODE;
       const imageName = resolveImageName(imageNameFlag, cwd);
 
       // Agent is hardcoded to claude-code (agent selection is not part of the public API)
@@ -143,7 +156,7 @@ const initCommand = Command.make(
 
       yield* d.spinner(
         "Scaffolding .sandcastle/ config directory...",
-        scaffold(cwd, provider, selectedTemplate).pipe(
+        scaffold(cwd, provider, executionMode, selectedTemplate).pipe(
           Effect.mapError(
             (e) =>
               new InitError({
@@ -153,30 +166,44 @@ const initCommand = Command.make(
         ),
       );
 
-      // Prompt user before building image
-      const shouldBuild = yield* Effect.promise(() =>
-        clack.confirm({
-          message: "Build the default Docker image now?",
-          initialValue: true,
-        }),
-      );
-
-      if (shouldBuild === true) {
-        const dockerfileDir = join(cwd, CONFIG_DIR);
-        yield* d.spinner(
-          `Building Docker image '${imageName}'...`,
-          buildImage(imageName, dockerfileDir),
+      if (executionMode === "docker") {
+        // Prompt user before building image
+        const shouldBuild = yield* Effect.promise(() =>
+          clack.confirm({
+            message: "Build the default Docker image now?",
+            initialValue: true,
+          }),
         );
-        yield* d.status("Init complete! Image built successfully.", "success");
+
+        if (shouldBuild === true) {
+          const dockerfileDir = join(cwd, CONFIG_DIR);
+          yield* d.spinner(
+            `Building Docker image '${imageName}'...`,
+            buildImage(imageName!, dockerfileDir),
+          );
+          yield* d.status(
+            "Init complete! Image built successfully.",
+            "success",
+          );
+        } else {
+          yield* d.status(
+            "Init complete! Run `sandcastle build-image` to build the Docker image later.",
+            "success",
+          );
+        }
       } else {
         yield* d.status(
-          "Init complete! Run `sandcastle build-image` to build the Docker image later.",
+          "Init complete! Local mode selected, so no Docker image was built.",
           "success",
         );
       }
 
       // Show template-specific next steps
-      const nextSteps = getNextStepsLines(selectedTemplate, provider);
+      const nextSteps = getNextStepsLines(
+        selectedTemplate,
+        provider,
+        executionMode,
+      );
       for (const [i, line] of nextSteps.entries()) {
         yield* d.text(i === 0 ? line : styleText("dim", line));
       }

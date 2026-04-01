@@ -3,6 +3,7 @@ import path, { join } from "node:path";
 import { styleText } from "node:util";
 import { Effect, Layer } from "effect";
 import { getAgentProvider } from "./AgentProvider.js";
+import { DEFAULT_EXECUTION_MODE, type ExecutionMode } from "./ExecutionMode.js";
 import {
   ClackDisplay,
   Display,
@@ -16,6 +17,7 @@ import {
   WorktreeSandboxConfig,
   SANDBOX_WORKSPACE_DIR,
 } from "./SandboxFactory.js";
+import { WorktreeLocalSandboxFactory } from "./LocalSandboxFactory.js";
 import { resolveEnv } from "./EnvResolver.js";
 import { generateTempBranchName, getCurrentBranch } from "./WorktreeManager.js";
 import {
@@ -90,7 +92,8 @@ export const buildLogFilename = (
 export interface RunSummaryRowsOptions {
   readonly name?: string;
   readonly agentName: string;
-  readonly imageName: string;
+  readonly imageName?: string;
+  readonly executionMode?: ExecutionMode;
   readonly maxIterations: number;
   readonly branch: string;
   readonly model?: string;
@@ -106,10 +109,11 @@ export const buildRunSummaryRows = (
 ): Record<string, string> => {
   const rows: Record<string, string> = {
     Agent: options.name ?? options.agentName,
-    Image: options.imageName,
+    Execution: options.executionMode ?? DEFAULT_EXECUTION_MODE,
     "Max iterations": String(options.maxIterations),
     Branch: options.branch,
   };
+  if (options.imageName) rows["Image"] = options.imageName;
   if (options.model) rows["Model"] = options.model;
   return rows;
 };
@@ -160,7 +164,9 @@ export interface RunOptions {
   readonly branch?: string;
   /** Model to use for the agent (default: claude-opus-4-6) */
   readonly model?: string;
-  /** Docker image name to use for the sandbox (default: sandcastle:<repo-dir-name>) */
+  /** Execution backend (default: docker) */
+  readonly executionMode?: ExecutionMode;
+  /** Docker image name to use for the sandbox (default: sandcastle:<repo-dir-name>). Ignored in local mode. */
   readonly imageName?: string;
   /** Key-value map for {{KEY}} placeholder substitution in prompts */
   readonly promptArgs?: PromptArgs;
@@ -218,13 +224,20 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
   // Agent is hardcoded to claude-code (agent selection is not part of the public API)
   const agentName = "claude-code";
   const provider = getAgentProvider(agentName);
+  const executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
 
   // Resolve image name: explicit option > default
-  const resolvedImageName = options.imageName ?? defaultImageName(hostRepoDir);
+  const resolvedImageName =
+    executionMode === "docker"
+      ? (options.imageName ?? defaultImageName(hostRepoDir))
+      : undefined;
 
   // Resolve env vars
   const env = await Effect.runPromise(
-    resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
+    resolveEnv(
+      hostRepoDir,
+      Object.keys(provider.envManifest(executionMode)),
+    ).pipe(Effect.provide(NodeContext.layer)),
   );
 
   // When no branch is provided, generate a temporary branch name.
@@ -267,23 +280,25 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
         })()
       : ClackDisplay.layer;
 
-  const factoryLayer = Layer.provide(
-    WorktreeDockerSandboxFactory.layer,
-    Layer.mergeAll(
-      Layer.succeed(WorktreeSandboxConfig, {
-        imageName: resolvedImageName,
-        env,
-        hostRepoDir,
-        // Pass explicit branch only — when undefined, WorktreeManager creates a temp branch
-        // and SandboxLifecycle cherry-picks commits onto the host's current branch
-        branch,
-        copyToSandbox: options.copyToSandbox,
-        agentName,
-      }),
-      NodeFileSystem.layer,
-      displayLayer,
-    ),
+  const sandboxConfigLayer = Layer.mergeAll(
+    Layer.succeed(WorktreeSandboxConfig, {
+      imageName: resolvedImageName,
+      env,
+      hostRepoDir,
+      // Pass explicit branch only — when undefined, WorktreeManager creates a temp branch
+      // and SandboxLifecycle cherry-picks commits onto the host's current branch
+      branch,
+      copyToSandbox: options.copyToSandbox,
+      agentName,
+    }),
+    NodeFileSystem.layer,
+    displayLayer,
   );
+
+  const factoryLayer =
+    executionMode === "docker"
+      ? Layer.provide(WorktreeDockerSandboxFactory.layer, sandboxConfigLayer)
+      : Layer.provide(WorktreeLocalSandboxFactory.layer, sandboxConfigLayer);
 
   const runLayer = Layer.merge(factoryLayer, displayLayer);
 
@@ -295,6 +310,7 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
         name: options.name,
         agentName,
         imageName: resolvedImageName,
+        executionMode,
         maxIterations,
         branch: resolvedBranch,
         model: resolvedModel,
@@ -321,7 +337,8 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
 
       const orchestrateResult = yield* orchestrate({
         hostRepoDir,
-        sandboxRepoDir: SANDBOX_WORKSPACE_DIR,
+        sandboxRepoDir:
+          executionMode === "docker" ? SANDBOX_WORKSPACE_DIR : hostRepoDir,
         iterations: maxIterations,
         hooks,
         prompt: resolvedPrompt,

@@ -33,6 +33,7 @@ const parseEnvFile = (
  */
 export const resolveEnv = (
   repoDir: string,
+  extraKeys: string[] = [],
 ): Effect.Effect<Record<string, string>, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const sandcastleEnv = yield* parseEnvFile(
@@ -40,7 +41,10 @@ export const resolveEnv = (
     );
 
     const result: Record<string, string> = {};
-    for (const key of Object.keys(sandcastleEnv)) {
+    const keys = Array.from(
+      new Set([...Object.keys(sandcastleEnv), ...extraKeys]),
+    );
+    for (const key of keys) {
       const value = sandcastleEnv[key] || process.env[key];
       if (value) {
         result[key] = value;

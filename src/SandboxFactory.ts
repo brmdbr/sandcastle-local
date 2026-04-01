@@ -272,7 +272,7 @@ const forceRemoveContainerSync = (containerName: string): void => {
 export class WorktreeSandboxConfig extends Context.Tag("WorktreeSandboxConfig")<
   WorktreeSandboxConfig,
   {
-    readonly imageName: string;
+    readonly imageName?: string;
     readonly env: Record<string, string>;
     readonly hostRepoDir: string;
     /** When specified, the worktree checks out this branch. Otherwise a temp branch is created. */
@@ -391,7 +391,7 @@ export const WorktreeDockerSandboxFactory = {
 
                   return startContainer(
                     containerName,
-                    imageName,
+                    imageName!,
                     { ...env, HOME: "/home/agent" },
                     {
                       volumeMounts,
